@@ -22,7 +22,6 @@ import { resetCamera, setCameraAttrs } from '../actions/camera'
 import { selectDocument, toggleSelectDocument, scaleTranslateSelectedDocuments, translateSelectedDocuments } from '../actions/document';
 import { setWorkspaceAttrs } from '../actions/workspace';
 
-import Capture from './capture';
 import { withDocumentCache } from './document-cache'
 import { Dom3d, Text3d } from './dom3d';
 import { DrawCommands } from '../draw-commands'
@@ -31,8 +30,12 @@ import { LaserPreview } from '../draw-commands/LaserPreview'
 import { convertOutlineToThickLines } from '../draw-commands/thick-lines'
 import { Input } from './forms.js';
 import SetSize from './setsize';
+import { dist } from '../lib/cam';
 import { parseGcode } from '../lib/tmpParseGcode';
+import Pointable from '../lib/Pointable';
 
+import CommandHistory from './command-history'
+import { getVideoResolution } from '../lib/video-capture'
 
 function camera({viewportWidth, viewportHeight, fovy, near, far, eye, center, up, showPerspective}) {
     let perspective;
@@ -250,6 +253,49 @@ function drawDocuments(perspective, view, drawCommands, documentCacheHolder) {
     }
 } // drawDocuments
 
+
+// WEBCAM
+function bindVideoTexture(drawCommands, videoTexture, videoElement, size) {
+    let stream=window.videoCapture.getStream();
+    if (!videoElement.srcObject || (videoElement.srcObject!=stream)) 
+        videoElement.srcObject = stream;
+    
+    if (videoElement.readyState === videoElement.HAVE_ENOUGH_DATA && window.videoCapture.isReady) {
+        videoTexture.set({ image: videoElement, width: size.width, height: size.height })
+        return true;
+    }
+    return false;
+}
+
+function fxChain(drawCommands, fx) {
+    let fxTexture;
+    fx.forEach((params) => {
+        let cb=() => {
+            let uniforms = Object.assign({ texture: fxTexture }, params.uniforms);
+            drawCommands[params.name](uniforms)
+            fxTexture = (params.buffer) ? params.buffer.texture : null;
+        }
+
+        if (params.buffer){
+            drawCommands.useFrameBuffer(params.buffer, cb)
+        } else {
+            cb()
+        }
+    })
+    return fxTexture;
+}
+
+function drawVideo(perspective, view, drawCommands, videoTexture, size) {
+    drawCommands.image({
+        perspective, view,
+        location: [0, 0, 0],
+        size: [size.width, size.height],
+        texture: videoTexture,
+        selected: false,
+    });
+}
+// /WEBCAM 
+
 function drawSelectedDocuments(perspective, view, drawCommands, documentCacheHolder) {
     for (let cachedDocument of documentCacheHolder.cache.values()) {
         let {document} = cachedDocument;
@@ -285,6 +331,8 @@ function drawSelectedDocuments(perspective, view, drawCommands, documentCacheHol
         }
     }
 } // drawSelectedDocuments
+
+
 
 function drawDocumentsHitTest(perspective, view, drawCommands, documentCacheHolder) {
     for (let cachedDocument of documentCacheHolder.cache.values()) {
@@ -368,12 +416,14 @@ function drawWorkPos(perspective, view, drawCommands, workPos) {
 
 class WorkspaceContent extends React.Component {
     componentWillMount() {
+        this.pointers = [];
         this.grid = new Grid();
         this.setCanvas = this.setCanvas.bind(this);
         this.documentCache = [];
-        this.mouseDown = this.mouseDown.bind(this);
-        this.mouseMove = this.mouseMove.bind(this);
-        this.mouseUp = this.mouseUp.bind(this);
+        this.onPointerDown = this.onPointerDown.bind(this);
+        this.onPointerMove = this.onPointerMove.bind(this);
+        this.onPointerUp = this.onPointerUp.bind(this);
+        this.onPointerCancel = this.onPointerCancel.bind(this);
         this.contextMenu = this.contextMenu.bind(this);
         this.wheel = this.wheel.bind(this);
         this.setCamera(this.props);
@@ -395,6 +445,13 @@ class WorkspaceContent extends React.Component {
         this.props.documentCacheHolder.drawCommands = this.drawCommands;
         this.hitTestFrameBuffer = this.drawCommands.createFrameBuffer(this.props.width, this.props.height);
 
+        // WEBCAM INIT
+        let workspaceSize = { width: this.props.settings.machineWidth, height: this.props.settings.machineHeight }
+        let videoSize = getVideoResolution(this.props.settings.toolVideoResolution)
+        this.videoElement = document.createElement('video')
+        this.videoTexture = this.drawCommands.createTexture(videoSize.width, videoSize.height);
+        this.barrelBuffer = this.drawCommands.createFrameBuffer(videoSize.width, videoSize.height);
+
         let draw = () => {
             if (!this.canvas)
                 return;
@@ -404,6 +461,31 @@ class WorkspaceContent extends React.Component {
             gl.clear(gl.COLOR_BUFFER_BIT, gl.DEPTH_BUFFER_BIT);
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
             gl.enable(gl.BLEND);
+
+            // WEBCAM
+            // BINDS VIDEO FEED with TEXTURE
+
+            if (this.props.workspace.showWebcam && bindVideoTexture(this.drawCommands, this.videoTexture, this.videoElement, videoSize)) {
+                let l = this.props.settings.toolVideoLens
+                let f = this.props.settings.toolVideoFov
+                // APPLIES FX CHAIN
+                
+
+                let videoTexture = fxChain(this.drawCommands,
+                    [
+                        {name: 'image', buffer: null, uniforms: {texture: this.videoTexture, perspective: this.camera.perspective, view: this.camera.view, location: [0,0,0], size: [workspaceSize.width, workspaceSize.height], selected: false}}  // DRAWS THE RESULT BUFFER ONTO IMAGE
+                    ]
+                )
+                /*
+                let videoTexture = fxChain(this.drawCommands,
+                    [
+                        {name: 'barrelDistort',  buffer: this.barrelBuffer, uniforms: { texture: this.videoTexture, lens: [l.a, l.b, l.F, l.scale], fov: [f.x, f.y] } },
+                        {name: 'image', buffer: null, uniforms: {perspective: this.camera.perspective, view: this.camera.view, location: [0,0,0], size: [workspaceSize.width, workspaceSize.height], selected: false}}  // DRAWS THE RESULT BUFFER ONTO IMAGE
+                    ]
+                )
+                */
+            }
+
             this.grid.draw(this.drawCommands, { perspective: this.camera.perspective, view: this.camera.view, width: this.props.settings.machineWidth, height: this.props.settings.machineHeight });
             if (this.props.workspace.showDocuments)
                 drawDocuments(this.camera.perspective, this.camera.view, this.drawCommands, this.props.documentCacheHolder);
@@ -422,6 +504,7 @@ class WorkspaceContent extends React.Component {
                 drawSelectedDocuments(this.camera.perspective, this.camera.view, this.drawCommands, this.props.documentCacheHolder);
             if (this.props.workspace.showWorkPos)
                 drawWorkPos(this.camera.perspective, this.camera.view, this.drawCommands, this.props.workspace.workPos);
+
             requestAnimationFrame(draw);
         };
         draw();
@@ -497,15 +580,18 @@ class WorkspaceContent extends React.Component {
         return result;
     }
 
-    mouseDown(e) {
-        this.mouseX = e.pageX;
-        this.mouseY = e.pageY;
+    onPointerDown(e) {
+        e.preventDefault();
+        e.target.setPointerCapture(e.pointerId);
+        if (this.pointers.length && e.pointerType !== this.pointers[0].pointerType)
+            this.pointers = [];
+        this.pointers.push({ pointerId: e.pointerId, pointerType: e.pointerType, button: e.button, pageX: e.pageX, pageY: e.pageY });
         this.movingObjects = false;
         this.adjustingCamera = false;
         this.needToSelect = null;
         this.toggle = e.ctrlKey || e.shiftKey;
         this.moveStarted = false;
-
+        this.fingers = null;
         let cachedDocument = this.hitTest(e.pageX, e.pageY);
         if (cachedDocument && e.button === 0) {
             this.movingObjects = true;
@@ -522,19 +608,36 @@ class WorkspaceContent extends React.Component {
         }
     }
 
-    mouseUp(e) {
-        if (this.needToSelect) {
-            if (this.toggle)
-                this.props.dispatch(toggleSelectDocument(this.needToSelect));
-            else
-                this.props.dispatch(selectDocument(this.needToSelect));
-        } else if (this.adjustingCamera && !this.moveStarted)
-            this.props.dispatch(selectDocument(''));
+    onPointerUp(e) {
+        e.preventDefault();
+        if (!this.pointers.length || e.pointerType !== this.pointers[0].pointerType)
+            return;
+        this.pointers = this.pointers.filter(x => x.pointerId !== e.pointerId);
+        this.fingers = null;
+        if (!this.pointers.length) {
+            if (this.needToSelect) {
+                if (this.toggle)
+                    this.props.dispatch(toggleSelectDocument(this.needToSelect));
+                else
+                    this.props.dispatch(selectDocument(this.needToSelect));
+            } else if (this.adjustingCamera && !this.moveStarted)
+                this.props.dispatch(selectDocument(''));
+        }
     }
 
-    mouseMove(e) {
-        let dx = e.pageX - this.mouseX;
-        let dy = this.mouseY - e.pageY;
+    onPointerCancel(e) {
+        e.preventDefault();
+        this.pointers = this.pointers.filter(x => x.pointerId !== e.pointerId);
+        this.fingers = null;
+    }
+
+    onPointerMove(e) {
+        e.preventDefault();
+        let pointer = this.pointers.find(x => x.pointerId === e.pointerId);
+        if (!pointer)
+            return;
+        let dx = e.pageX - pointer.pageX;
+        let dy = pointer.pageY - e.pageY;
         if (Math.abs(dx) >= 10 || Math.abs(dy) >= 10)
             this.moveStarted = true;
         if (!this.moveStarted)
@@ -542,40 +645,69 @@ class WorkspaceContent extends React.Component {
         if (this.movingObjects) {
             this.needToSelect = null;
             let p1 = this.xyInterceptFromPoint(e.pageX, e.pageY);
-            let p2 = this.xyInterceptFromPoint(this.mouseX, this.mouseY);
+            let p2 = this.xyInterceptFromPoint(pointer.pageX, pointer.pageY);
             if (p1 && p2)
                 this.props.dispatch(translateSelectedDocuments(vec3.sub([], p1, p2)));
-            this.mouseX = e.pageX;
-            this.mouseY = e.pageY;
+            pointer.pageX = e.pageX;
+            pointer.pageY = e.pageY;
         } else if (this.adjustingCamera) {
             let camera = this.props.camera;
-            if (e.button === 0) {
-                let rot = mat4.mul([],
-                    mat4.fromRotation([], dy / 200, vec3.cross([], camera.up, vec3.sub([], camera.eye, camera.center))),
-                    mat4.fromRotation([], -dx / 200, camera.up));
-                this.props.dispatch(setCameraAttrs({
-                    eye: vec3.add([], vec3.transformMat4([], vec3.sub([], camera.eye, camera.center), rot), camera.center),
-                    up: vec3.normalize([], vec3.transformMat4([], camera.up, rot)),
-                }));
-            } else if (e.button === 1) {
-                this.props.dispatch(setCameraAttrs({
-                    fovy: Math.max(.1, Math.min(Math.PI - .1, camera.fovy * Math.exp(-dy / 200))),
-                }));
-            } else if (e.button === 2) {
-                let n = vec3.normalize([], vec3.cross([], camera.up, vec3.sub([], camera.eye, camera.center)));
-                this.props.dispatch(setCameraAttrs({
-                    eye: vec3.add([], camera.eye,
-                        vec3.add([], vec3.scale([], n, -dx), vec3.scale([], camera.up, -dy))),
-                    center: vec3.add([], camera.center,
-                        vec3.add([], vec3.scale([], n, -dx), vec3.scale([], camera.up, -dy))),
-                }));
+            pointer.pageX = e.pageX;
+            pointer.pageY = e.pageY;
+            if (e.pointerType === 'touch' && this.pointers.length >= 2) {
+                let centerX = this.pointers.reduce((acc, o) => acc + o.pageX, 0) / this.pointers.length;
+                let centerY = this.pointers.reduce((acc, o) => acc + o.pageY, 0) / this.pointers.length;
+                let distance = dist(
+                    this.pointers[0].pageX, this.pointers[0].pageY,
+                    this.pointers[1].pageX, this.pointers[1].pageY);
+                if (this.fingers && this.fingers.num == this.pointers.length) {
+                    if (this.pointers.length === 2) {
+                        let d = distance - this.fingers.distance;
+                        this.props.dispatch(setCameraAttrs({
+                            fovy: Math.max(.1, Math.min(Math.PI - .1, camera.fovy * Math.exp(-d / 200))),
+                        }));
+                    } else if (this.pointers.length === 3) {
+                        let dx = centerX - this.fingers.centerX;
+                        let dy = centerY - this.fingers.centerY;
+                        let rot = mat4.mul([],
+                            mat4.fromRotation([], -dy / 100, vec3.cross([], camera.up, vec3.sub([], camera.eye, camera.center))),
+                            mat4.fromRotation([], -dx / 100, camera.up));
+                        this.props.dispatch(setCameraAttrs({
+                            eye: vec3.add([], vec3.transformMat4([], vec3.sub([], camera.eye, camera.center), rot), camera.center),
+                            up: vec3.normalize([], vec3.transformMat4([], camera.up, rot)),
+                        }));
+                    }
+                }
+                this.fingers = { num: this.pointers.length, centerX, centerY, distance };
+            } else {
+                this.fingers = null;
+                if (pointer.button === 2) {
+                    let rot = mat4.mul([],
+                        mat4.fromRotation([], dy / 200, vec3.cross([], camera.up, vec3.sub([], camera.eye, camera.center))),
+                        mat4.fromRotation([], -dx / 200, camera.up));
+                    this.props.dispatch(setCameraAttrs({
+                        eye: vec3.add([], vec3.transformMat4([], vec3.sub([], camera.eye, camera.center), rot), camera.center),
+                        up: vec3.normalize([], vec3.transformMat4([], camera.up, rot)),
+                    }));
+                } else if (pointer.button === 1) {
+                    this.props.dispatch(setCameraAttrs({
+                        fovy: Math.max(.1, Math.min(Math.PI - .1, camera.fovy * Math.exp(-dy / 200))),
+                    }));
+                } else if (pointer.button === 0) {
+                    let n = vec3.normalize([], vec3.cross([], camera.up, vec3.sub([], camera.eye, camera.center)));
+                    this.props.dispatch(setCameraAttrs({
+                        eye: vec3.add([], camera.eye,
+                            vec3.add([], vec3.scale([], n, -dx), vec3.scale([], camera.up, -dy))),
+                        center: vec3.add([], camera.center,
+                            vec3.add([], vec3.scale([], n, -dx), vec3.scale([], camera.up, -dy))),
+                    }));
+                }
             }
-            this.mouseX = e.pageX;
-            this.mouseY = e.pageY;
         }
     }
 
     wheel(e) {
+        e.preventDefault();
         let camera = this.props.camera;
         this.props.dispatch(setCameraAttrs({
             fovy: Math.max(.1, Math.min(Math.PI - .1, camera.fovy * Math.exp(e.deltaY / 2000))),
@@ -598,10 +730,11 @@ class WorkspaceContent extends React.Component {
 
     render() {
         return (
-            <div>
-                <Capture
-                    onMouseDown={this.mouseDown} onMouseUp={this.mouseUp}
-                    onMouseMove={this.mouseMove} onContextMenu={this.contextMenu} onWheel={this.wheel}>
+            <div style={{ touchAction: 'none', userSelect: 'none' }}>
+                <Pointable tagName='div' touchAction="none"
+                    onPointerDown={this.onPointerDown} onPointerMove={this.onPointerMove}
+                    onPointerUp={this.onPointerUp} onPointerCancel={this.onPointerCancel}
+                    onWheel={this.wheel} onContextMenu={this.contextMenu}>
                     <div className="workspace-content">
                         <canvas
                             style={{ width: this.props.width, height: this.props.height }}
@@ -612,7 +745,7 @@ class WorkspaceContent extends React.Component {
                     <Dom3d className="workspace-content workspace-overlay" camera={this.camera} width={this.props.width} height={this.props.height}>
                         <GridText {...{ width: this.props.settings.machineWidth, height: this.props.settings.machineHeight }} />
                     </Dom3d>
-                </Capture>
+                </Pointable>
                 <div className="workspace-content workspace-overlay" style={{ zoom: window.devicePixelRatio }}>
                     <SetSize style={{ display: 'inline-block', pointerEvents: 'all' }}>
                         <FloatingControls
@@ -643,7 +776,7 @@ class Workspace extends React.Component {
     }
 
     render() {
-        let {camera, gcode, workspace, setG0Rate, setShowPerspective, setShowGcode, setShowLaser, setShowDocuments} = this.props;
+        let {camera, gcode, workspace, setG0Rate, setShowPerspective, setShowGcode, setShowLaser, setShowDocuments, setShowWebcam, enableVideo} = this.props;
         if (this.gcode !== gcode) {
             this.gcode = gcode;
             let parsedGcode = parseGcode(gcode);
@@ -678,6 +811,10 @@ class Workspace extends React.Component {
                                     <td>Show Documents</td>
                                     <td><input checked={workspace.showDocuments} onChange={setShowDocuments} type="checkbox" /></td>
                                 </tr>
+                                <tr>
+                                    <td>Show Webcam</td>
+                                    <td><input checked={workspace.showWebcam} disabled={!enableVideo} onChange={setShowWebcam} type="checkbox" /></td>
+                                </tr>
                             </tbody>
                         </table>
                         <table style={{ marginLeft: 10 }}>
@@ -697,14 +834,16 @@ class Workspace extends React.Component {
                                 </tr>
                             </tbody>
                         </table>
+                        <CommandHistory style={{ flexGrow: 1, marginLeft: 10}}/>
                     </div>
+                    
                 </div>
             </div>
         )
     }
 }
 Workspace = connect(
-    state => ({ camera: state.camera, gcode: state.gcode.content, workspace: state.workspace }),
+    state => ({ camera: state.camera, gcode: state.gcode.content, workspace: state.workspace, enableVideo: (state.settings.toolVideoDevice!==null) }),
     dispatch => ({
         dispatch,
         reset: () => dispatch(resetCamera()),
@@ -713,6 +852,7 @@ Workspace = connect(
         setShowGcode: e => dispatch(setWorkspaceAttrs({ showGcode: e.target.checked })),
         setShowLaser: e => dispatch(setWorkspaceAttrs({ showLaser: e.target.checked })),
         setShowDocuments: e => dispatch(setWorkspaceAttrs({ showDocuments: e.target.checked })),
+        setShowWebcam: e => dispatch(setWorkspaceAttrs({ showWebcam: e.target.checked })),
     })
 )(Workspace);
 export default Workspace;

@@ -44,6 +44,8 @@ import {fireMacroByKeyboard} from '../actions/macros'
 
 import {GlobalStore} from '../index'
 
+import { VideoCapture } from '../lib/video-capture'
+
 /**
  * LaserWeb main component (layout).
  * - Create the main layout.
@@ -69,6 +71,17 @@ class LaserWeb extends React.Component {
         return nextProps.documents !== this.props.documents;
     }
 
+    componentDidMount()
+    {
+        if (!window.videoCapture){
+            const onNextFrame = (callback) => {setTimeout(()=>{window.requestAnimationFrame(callback)}, 0)}
+            onNextFrame(()=>{
+                window.videoCapture = new VideoCapture()
+                window.videoCapture.scan(this.props.settings.toolVideoDevice, this.props.settings.toolVideoResolution, (obj)=>{this.props.handleVideoStream(obj)})
+            })
+        }
+    }
+
     render() {
         // 2017-01-21 Pvdw - removed the following from Dock
         // <Gcode id="gcode" title="G-Code" icon="file-code-o" />
@@ -78,9 +91,9 @@ class LaserWeb extends React.Component {
                 <DocumentCacheHolder style={{ width: '100%' }} documents={this.props.documents}>
                     <div style={{ display: 'flex', flexDirection: 'row', height: '100%' }}>
                         <Sidebar ref="sidebar" style={{ flexGrow: 0, flexShrink: 0 }}>
+                            <Cam id="cam" title="CAM" icon="pencil-square-o" />
                             <Com id="com" title="Comms" icon="plug" />
                             <Jog id="jog" title="Jog" icon="arrows-alt" />
-                            <Cam id="cam" title="CAM" icon="pencil-square-o" />
                             <Settings id="settings" title="Settings" icon="cogs" />
                             <About id="about" title="About" icon="question" />
                         </Sidebar>
@@ -97,6 +110,7 @@ const mapStateToProps = (state) => {
         macros: state.macros,
         visible: state.panes.visible,
         documents: state.documents,
+        settings: state.settings,
     }
 }
 
@@ -108,6 +122,9 @@ const mapDispatchToProps = (dispatch) => {
          },
          handleMacro: (e, macros) =>{
                 dispatch(fireMacroByKeyboard(e,macros))
+         },
+         handleVideoStream: (props) =>{
+             //console.log(props)
          }
 
     }
