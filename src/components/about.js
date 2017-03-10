@@ -5,8 +5,10 @@
 
 // React
 import React from 'react'
+import { connect } from 'react-redux';
 import { ButtonToolbar, Button } from 'react-bootstrap'
 import Icon from './font-awesome'
+import marked from 'marked';
 /**
  * About component.
  *
@@ -19,8 +21,25 @@ class About extends React.Component {
      * @return {String}
      */
     render() {
+
+        let machineAbout;
+        if (this.props.settings.__selectedProfile && this.props.profiles.hasOwnProperty(this.props.settings.__selectedProfile)){
+          let aboutFile=this.props.profiles[this.props.settings.__selectedProfile].machineAbout
+          if (aboutFile) {
+            machineAbout=<div dangerouslySetInnerHTML={{__html: marked(require('raw-loader!../data/lw.machines/'+aboutFile))}}></div>
+          }
+        }
+
         return (
             <div>
+
+                {machineAbout}
+
+                <h3>Versions</h3>
+                  <dl>
+                    <dt><Icon name="cubes"/> Frontend: {this.props.settings.__version}</dt><dd></dd><p/>
+                    <dt><Icon name="usb"/> Backend: {this.props.settings.comServerVersion}</dt><dd></dd><p/>
+                  </dl>
                 <h3>Support Communities</h3>
                   <dl>
                     <dt><Icon name="users"/> <a href="https://github.com/LaserWeb">LaserWeb Github Organisation</a></dt>
@@ -31,7 +50,6 @@ class About extends React.Component {
                     <dd><small>- support community for popular K40 CO2 Lasers</small></dd><p/>
                     <dt><Icon name="users"/> <a href="https://plus.google.com/communities/109476961016291692936">Eleksmaker G+ Community</a></dt>
                     <dd><small>- support community for chinese diode engravers</small></dd><p/>
-
                   </dl>
                 <h3>Developers</h3>
                   <dl>
@@ -52,6 +70,10 @@ class About extends React.Component {
         )
     }
 }
+
+About = connect(
+    state => ({ settings: state.settings, profiles: state.machineProfiles })
+)(About);
 
 // Exports
 export default About

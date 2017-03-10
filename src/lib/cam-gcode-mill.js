@@ -179,107 +179,106 @@ export function getMillGcode(props) {
     return gcode;
 }; // getMillGcode
 
-export function getMillGcodeFromOp(settings, opIndex, op, geometry, openGeometry, tabGeometry, showAlert,  done, progress, QE) {
+export function getMillGcodeFromOp(settings, opIndex, op, geometry, openGeometry, tabGeometry, showAlert,  done, progress) {
     let ok = true;
     if (op.passDepth <= 0) {
-        showAlert("Pass Depth must be greater than 0", "alert-danger");
+        showAlert("Pass Depth must be greater than 0", "danger");
         ok = false;
     }
     if (op.type === 'Mill V Carve') {
         if (op.toolAngle <= 0 || op.toolAngle >= 180) {
-            showAlert("Tool Angle must be in range (0, 180)", "alert-danger");
+            showAlert("Tool Angle must be in range (0, 180)", "danger");
             ok = false;
         }
     } else {
         if (op.cutDepth <= 0) {
-            showAlert("Final Cut Depth must be greater than 0", "alert-danger");
+            showAlert("Final Cut Depth must be greater than 0", "danger");
             ok = false;
         }
         if (op.type !== 'Mill Cut' && op.toolDiameter <= 0) {
-            showAlert("Tool Diameter must be greater than 0", "alert-danger");
+            showAlert("Tool Diameter must be greater than 0", "danger");
             ok = false;
         }
         if (op.stepOver <= 0 || op.stepOver > 1) {
-            showAlert("Step Over must be in range (0,1]", "alert-danger");
+            showAlert("Step Over must be in range (0,1]", "danger");
             ok = false;
         }
     }
     if (op.plungeRate <= 0) {
-        showAlert("Plunge Rate must be greater than 0", "alert-danger");
+        showAlert("Plunge Rate must be greater than 0", "danger");
         ok = false;
     }
     if (op.cutRate <= 0) {
-        showAlert("Cut Rate must be greater than 0", "alert-danger");
+        showAlert("Cut Rate must be greater than 0", "danger");
         ok = false;
     }
     if (!ok)
         done(false);
 
-    QE.push((cb)=>{
 
-        let camPaths = [];
-        if (op.type === 'Mill Pocket') {
-            if (op.margin)
-                geometry = offset(geometry, -op.margin * mmToClipperScale);
-            camPaths = pocket(geometry, op.toolDiameter * mmToClipperScale, op.stepOver, op.direction === 'Climb');
-        } else if (op.type === 'Mill Cut') {
-            camPaths = cut(geometry, openGeometry, op.direction === 'Climb');
-        } else if (op.type === 'Mill Cut Inside') {
-            if (op.margin)
-                geometry = offset(geometry, -op.margin * mmToClipperScale);
-            camPaths = insideOutside(geometry, op.toolDiameter * mmToClipperScale, true, op.cutWidth * mmToClipperScale, op.stepOver, op.direction === 'Climb', true);
-        } else if (op.type === 'Mill Cut Outside') {
-            if (op.margin)
-                geometry = offset(geometry, op.margin * mmToClipperScale);
-            camPaths = insideOutside(geometry, op.toolDiameter * mmToClipperScale, false, op.cutWidth * mmToClipperScale, op.stepOver, op.direction === 'Climb', true);
-        } else if (op.type === 'Mill V Carve') {
-            camPaths = vCarve(geometry, op.toolAngle, op.passDepth * mmToClipperScale);
+    let camPaths = [];
+    if (op.type === 'Mill Pocket') {
+        if (op.margin)
+            geometry = offset(geometry, -op.margin * mmToClipperScale);
+        camPaths = pocket(geometry, op.toolDiameter * mmToClipperScale, op.stepOver, op.direction === 'Climb');
+    } else if (op.type === 'Mill Cut') {
+        camPaths = cut(geometry, openGeometry, op.direction === 'Climb');
+    } else if (op.type === 'Mill Cut Inside') {
+        if (op.margin)
+            geometry = offset(geometry, -op.margin * mmToClipperScale);
+        camPaths = insideOutside(geometry, op.toolDiameter * mmToClipperScale, true, op.cutWidth * mmToClipperScale, op.stepOver, op.direction === 'Climb', true);
+    } else if (op.type === 'Mill Cut Outside') {
+        if (op.margin)
+            geometry = offset(geometry, op.margin * mmToClipperScale);
+        camPaths = insideOutside(geometry, op.toolDiameter * mmToClipperScale, false, op.cutWidth * mmToClipperScale, op.stepOver, op.direction === 'Climb', true);
+    } else if (op.type === 'Mill V Carve') {
+        camPaths = vCarve(geometry, op.toolAngle, op.passDepth * mmToClipperScale);
+    }
+
+    for (let camPath of camPaths) {
+        let path = camPath.path;
+        for (let point of path) {
+            point.X = Math.round(point.X / mmToClipperScale * 1000) * mmToClipperScale / 1000;
+            point.Y = Math.round(point.Y / mmToClipperScale * 1000) * mmToClipperScale / 1000;
         }
+    }
+    reduceCamPaths(camPaths, op.segmentLength * mmToClipperScale);
 
-        for (let camPath of camPaths) {
-            let path = camPath.path;
-            for (let point of path) {
-                point.X = Math.round(point.X / mmToClipperScale * 1000) * mmToClipperScale / 1000;
-                point.Y = Math.round(point.Y / mmToClipperScale * 1000) * mmToClipperScale / 1000;
-            }
-        }
-        reduceCamPaths(camPaths, op.segmentLength * mmToClipperScale);
+    let feedScale = 1;
+    if (settings.toolFeedUnits === 'mm/s')
+        feedScale = 60;
 
-        let feedScale = 1;
-        if (settings.toolFeedUnits === 'mm/s')
-            feedScale = 60;
+    let gcode =
+        "\r\n;" +
+        "\r\n; Operation:    " + opIndex +
+        "\r\n; Type:         " + op.type +
+        "\r\n; Paths:        " + camPaths.length +
+        "\r\n; Direction:    " + op.direction +
+        "\r\n; Cut Depth:    " + op.cutDepth +
+        "\r\n; Pass Depth:   " + op.passDepth +
+        "\r\n; clearance:    " + op.clearance +
+        "\r\n; Plunge rate:  " + op.plungeRate + ' ' + settings.toolFeedUnits +
+        "\r\n; Cut rate:     " + op.cutRate + ' ' + settings.toolFeedUnits +
+        "\r\n;\r\n";
 
-        let gcode =
-            "\r\n;" +
-            "\r\n; Operation:    " + opIndex +
-            "\r\n; Type:         " + op.type +
-            "\r\n; Paths:        " + camPaths.length +
-            "\r\n; Direction:    " + op.direction +
-            "\r\n; Cut Depth:    " + op.cutDepth +
-            "\r\n; Pass Depth:   " + op.passDepth +
-            "\r\n; clearance:    " + op.clearance +
-            "\r\n; Plunge rate:  " + op.plungeRate + ' ' + settings.toolFeedUnits +
-            "\r\n; Cut rate:     " + op.cutRate + ' ' + settings.toolFeedUnits +
-            "\r\n;\r\n";
-
-        gcode += getMillGcode({
-            paths: camPaths,
-            ramp: false,
-            scale: 1 / mmToClipperScale,
-            useZ: op.type === 'Mill V Carve',
-            offsetX: 0,
-            offsetY: 0,
-            decimal: 3,
-            topZ: 0,
-            botZ: -op.cutDepth,
-            safeZ: +op.clearance,
-            passDepth: op.passDepth,
-            plungeFeed: op.plungeRate * feedScale,
-            cutFeed: op.cutRate * feedScale,
-            tabGeometry: op.type === 'Mill V Carve' ? [] : tabGeometry,
-            tabZ: -op.tabDepth,
-        });
-
-        done(gcode, cb)
+    gcode += getMillGcode({
+        paths: camPaths,
+        ramp: false,
+        scale: 1 / mmToClipperScale,
+        useZ: op.type === 'Mill V Carve',
+        offsetX: 0,
+        offsetY: 0,
+        decimal: 3,
+        topZ: 0,
+        botZ: -op.cutDepth,
+        safeZ: +op.clearance,
+        passDepth: op.passDepth,
+        plungeFeed: op.plungeRate * feedScale,
+        cutFeed: op.cutRate * feedScale,
+        tabGeometry: op.type === 'Mill V Carve' ? [] : tabGeometry,
+        tabZ: -op.tabDepth,
     });
+
+    done(gcode)
+
 } // getMillGcodeFromOp

@@ -14,7 +14,6 @@ import * as operation from './operation'
 import { Modal, Button, ButtonToolbar, ButtonGroup, FormControl, ControlLabel, FormGroup, PanelGroup, Panel, Collapse, InputGroup } from 'react-bootstrap'
 import { FileField } from './forms'
 
-import * as FlexData from 'react-flex-data';
 import Icon from './font-awesome';
 import stringify from 'json-stringify-pretty-compact';
 
@@ -33,6 +32,7 @@ import { cast } from '../lib/helpers'
 import { AllowCapture } from './capture'
 import Splitter from './splitter'
 
+import { alert, prompt, confirm} from './laserweb';
 
 import '../styles/material-database.css'
 
@@ -608,7 +608,9 @@ const mapDispatchToProps = (dispatch) => {
             dispatch(addGroup())
         },
         handleDelGroup: (id) => {
-            if (confirm("Are you sure?")) dispatch(deleteGroup(id))
+            confirm("Are you sure?",(b)=>{
+                if (b) dispatch(deleteGroup(id))
+            })
         },
         handleGroupEditToggle: (id) => {
             dispatch(toggleGroupEdit(id))
@@ -617,7 +619,9 @@ const mapDispatchToProps = (dispatch) => {
             dispatch(addPreset(id))
         },
         handleDelPreset: (id) => {
-            if (confirm("Are you sure?")) dispatch(deletePreset(id))
+            confirm("Are you sure?",(b)=>{
+                if (b) dispatch(deletePreset(id))
+            })
         },
         handleChangePreset: (id, attrs) => {
             dispatch(setPresetAttrs(id, attrs))

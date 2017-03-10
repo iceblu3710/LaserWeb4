@@ -21,6 +21,8 @@ import Icon from './font-awesome';
 
 import { PerspectiveWebcam, VideoDeviceField, VideoControls, VideoResolutionField } from './webcam';
 
+import { alert, prompt, confirm} from './laserweb';
+
 export class ApplicationSnapshot extends React.Component {
 
     constructor(props) {
@@ -76,10 +78,12 @@ export class ApplicationSnapshotToolbar extends React.Component {
 
     handleDownload(statekeys) {
         statekeys = Array.isArray(statekeys) ? statekeys : (this.props.stateKeys || []);
-        let file = prompt("Save as", this.props.saveAs || "laserweb-snapshot.json")
-        let settings = this.getExportData(statekeys);
-        let action = downloadSnapshot;
-        this.props.handleDownload(file, settings, action)
+        prompt("Save as", this.props.saveAs || "laserweb-snapshot.json", (file)=>{
+            if (!file) return;
+            let settings = this.getExportData(statekeys);
+            let action = downloadSnapshot;
+            this.props.handleDownload(file, settings, action)
+        })
     }
 
     handleUpload(file, statekeys) {
@@ -188,6 +192,13 @@ class Settings extends React.Component {
 
         let isVideoDeviceSelected = Boolean(this.props.settings['toolVideoDevice'] && this.props.settings['toolVideoDevice'].length);
 
+        let button = null;
+        if (window.require) {
+          button = <Button bsSize="xs" bsStyle="warning" onClick={(e)=>{this.props.handleDevTools(e)}}><Icon name="gear"/> Toggle Dev tools</Button>
+        } else {
+          button = null
+        }
+
         return (
             <div className="form">
 
@@ -206,6 +217,7 @@ class Settings extends React.Component {
                         <Collapse in={this.props.settings.machineZEnabled}>
                             <div>
                                 <NumberField {...{ errors: this.state.errors, object: this.props.settings, field: 'machineZToolOffset', setAttrs: setSettingsAttrs, description: 'Tool offset', labelAddon: false, units: 'mm' }} />
+                                <TextField {...{ errors: this.state.errors, object: this.props.settings, field: 'machineZStartHeight', setAttrs: setSettingsAttrs, description: 'Default Start Height', labelAddon: false, units: 'mm' }} />
                             </div>
                         </Collapse>
                         <hr />
@@ -220,7 +232,7 @@ class Settings extends React.Component {
                     <SettingsPanel collapsible header="File Settings" eventKey="2" bsStyle="info" errors={this.state.errors}>
                         <h4>SVG</h4>
                         <NumberField {...{ object: this.props.settings, field: 'pxPerInch', setAttrs: setSettingsAttrs, description: 'PX Per Inch', units: 'pxpi' }} />
-                        <h4>BMP</h4>
+                        <h4>BITMAPS (bmp, png, jpg)</h4>
                         <NumberField {...{ object: this.props.settings, field: 'dpiBitmap', setAttrs: setSettingsAttrs, description: 'Bitmap DPI', units: 'dpi' }} />
                     </SettingsPanel>
                     <SettingsPanel collapsible header="Gcode" eventKey="3" bsStyle="info" errors={this.state.errors}>
@@ -231,6 +243,8 @@ class Settings extends React.Component {
                         <TextField {...{ object: this.props.settings, field: 'gcodeToolOn', setAttrs: setSettingsAttrs, description: 'Tool ON', rows: 5, style: { resize: "vertical" } }} />
                         <TextField {...{ object: this.props.settings, field: 'gcodeToolOff', setAttrs: setSettingsAttrs, description: 'Tool OFF', rows: 5, style: { resize: "vertical" } }} />
                         <NumberField {...{ object: this.props.settings, field: 'gcodeSMaxValue', setAttrs: setSettingsAttrs, description: 'PWM Max S value' }} />
+                        <NumberField {...{ object: this.props.settings, field: 'gcodeToolTestPower', setAttrs: setSettingsAttrs, description: 'Tool Test Power', units: '%' }} />
+                        <NumberField {...{ object: this.props.settings, field: 'gcodeToolTestDuration', setAttrs: setSettingsAttrs, description: 'Tool Test duration', units: 'ms' }} />
                     </SettingsPanel>
                     <SettingsPanel collapsible header="Application" eventKey="4" bsStyle="info" errors={this.state.errors}>
                         <SelectField {...{ object: this.props.settings, field: 'toolFeedUnits', setAttrs: setSettingsAttrs, data: ['mm/s', 'mm/min'], defaultValue: 'mm/min', description: 'Feed Units', selectProps: { clearable: false } }} />
@@ -279,6 +293,10 @@ class Settings extends React.Component {
                         <h5 >Application Snapshot  <Label bsStyle="warning">Experimental!</Label></h5>
                         <small className="help-block">This dialog allows to save an entire snapshot of the current state of application.</small>
                         <ApplicationSnapshot />
+                        <ButtonToolbar>
+                        {button}
+                        <Button bsSize="xs" bsStyle="warning" onClick={(e)=>{this.props.handleRefresh(e)}}><Icon name="refresh"/> Refresh window</Button>
+                        </ButtonToolbar>
                     </Panel>
                 </PanelGroup>
             </div>
@@ -290,7 +308,10 @@ class Settings extends React.Component {
 
 const mapStateToProps = (state) => {
 
-    return { settings: state.settings, profiles: state.machineProfiles }
+    return {
+        settings: state.settings,
+        profiles: state.machineProfiles
+    }
 };
 
 const mapDispatchToProps = (dispatch) => {
@@ -313,7 +334,7 @@ const mapDispatchToProps = (dispatch) => {
                 LocalStorage.save(name, stringify(settings), "application/json")
             } catch (e) {
                 console.error(e);
-                alert(e);
+                alert(e)
             }
             dispatch(action(settings));
         },
@@ -323,6 +344,29 @@ const mapDispatchToProps = (dispatch) => {
         handleApplyProfile: (settings) => {
             dispatch(setSettingsAttrs(settings));
         },
+        handleDevTools:() => {
+            if (window.require) { // Are we in Electron?
+              const electron = window.require('electron');
+              const app = electron.remote;
+              var focusedWindow = app.BrowserWindow.getFocusedWindow()
+              // focusedWindow.openDevTools();
+              if (app.BrowserWindow.getFocusedWindow){
+                  // var focusedWindow = app.BrowserWindow.getFocusedWindow()
+                  if (focusedWindow.isDevToolsOpened()) {
+                      focusedWindow.closeDevTools();
+                  } else {
+                      focusedWindow.openDevTools();
+                  }
+              }
+            } else {
+                console.warn("Can't do that, pal")
+            }
+        },
+        handleRefresh:() => {
+
+            confirm("Are you sure? This will destroy unsaved work", (b)=>{ if (b) location.reload();})
+
+        }
     };
 };
 
